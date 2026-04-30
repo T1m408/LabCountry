@@ -3,8 +3,20 @@ import random
 
 import requests
 from dotenv import load_dotenv
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import (
+    ReplyKeyboardMarkup,
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters
+)
 
 
 load_dotenv(override=True)
@@ -85,33 +97,27 @@ def format_country(country: dict) -> tuple[str, str | None]:
 
 
 def search_country_by_name(name: str):
-    # Ограничиваем fields, чтобы не тянуть лишний JSON.
     params = {
         "fields": "name,capital,region,subregion,population,area,currencies,languages,flags,flag"
     }
+
     url = f"{REST_COUNTRIES_BASE}/name/{name.strip()}"
 
     try:
         response = requests.get(url, params=params, timeout=10)
     except requests.RequestException:
-        return None, "Не удалось подключиться к API стран. Попробуйте позже."
+        return None, "Не удалось подключиться к API стран."
 
     if response.status_code == 404:
-        return None, "Страна не найдена. Проверьте название."
+        return None, "Страна не найдена."
 
     if response.status_code != 200:
         return None, f"Ошибка API: {response.status_code}"
 
     data = response.json()
+
     if not isinstance(data, list) or not data:
         return None, "Страна не найдена."
-
-    lower_name = name.strip().lower()
-    for country in data:
-        common = country.get("name", {}).get("common", "").lower()
-        official = country.get("name", {}).get("official", "").lower()
-        if lower_name == common or lower_name == official:
-            return country, None
 
     return data[0], None
 
@@ -120,242 +126,197 @@ def get_random_country():
     params = {
         "fields": "name,capital,region,subregion,population,area,currencies,languages,flags,flag"
     }
-    url = f"{REST_COUNTRIES_BASE}/all"
 
     try:
-        response = requests.get(url, params=params, timeout=10)
-    except requests.RequestException:
-        return None, "Не удалось подключиться к API стран. Попробуйте позже."
-
-    if response.status_code != 200:
-        return None, f"Ошибка API: {response.status_code}"
-
-    data = response.json()
-    if not isinstance(data, list) or not data:
-        return None, "Список стран пуст."
-
-    return random.choice(data), None
+        response = requests.get(
+            f"{REST_COUNTRIES_BASE}/all", params=params, timeout=10)
+        data = response.json()
+        return random.choice(data), None
+    except:
+        return None, "Ошибка загрузки стран."
 
 
 def get_countries_for_quiz():
     params = {
         "fields": "name,flags,flag"
     }
-    url = f"{REST_COUNTRIES_BASE}/all"
 
     try:
-        response = requests.get(url, params=params, timeout=10)
-    except requests.RequestException:
-        return None, "Не удалось подключиться к API стран. Попробуйте позже."
-
-    if response.status_code != 200:
-        return None, f"Ошибка API: {response.status_code}"
-
-    data = response.json()
-    if not isinstance(data, list) or not data:
-        return None, "Список стран пуст."
+        response = requests.get(
+            f"{REST_COUNTRIES_BASE}/all", params=params, timeout=10)
+        data = response.json()
+    except:
+        return None, "Ошибка загрузки стран."
 
     valid = []
+
     for country in data:
         name = country.get("name", {}).get("common")
         flag_url = country.get("flags", {}).get("png")
+
         if name and flag_url:
             valid.append(country)
-
-    if len(valid) < 4:
-        return None, "Недостаточно данных для викторины."
 
     return valid, None
 
 
 def build_quiz_round(countries: list[dict]):
     correct = random.choice(countries)
-    correct_name = correct.get("name", {}).get("common", "-")
-    flag_url = correct.get("flags", {}).get("png")
+    correct_name = correct["name"]["common"]
+    flag_url = correct["flags"]["png"]
 
-    pool = [
-        c.get("name", {}).get("common")
-        for c in countries
-        if c.get("name", {}).get("common") and c.get("name", {}).get("common") != correct_name
-    ]
-    random.shuffle(pool)
+    other = []
 
-    other_names = []
-    for name in pool:
-        if name not in other_names:
-            other_names.append(name)
-        if len(other_names) == 3:
-            break
+    while len(other) < 3:
+        c = random.choice(countries)
+        name = c["name"]["common"]
 
-    options = other_names + [correct_name]
+        if name != correct_name and name not in other:
+            other.append(name)
+
+    options = other + [correct_name]
     random.shuffle(options)
 
     return {
         "correct": correct_name,
         "options": options,
-        "flag_url": flag_url,
+        "flag_url": flag_url
     }
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я бот по странам мира.\n"
-        "Отправь название страны (например: Japan, Kazakhstan, Germany).\n"
-        "Также можно нажать кнопку случайной страны или викторины по флагу.",
-        reply_markup=get_main_keyboard(),
+        "Напиши название страны или выбери кнопку.",
+        reply_markup=get_main_keyboard()
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Доступно:\n"
         "/start - старт\n"
         "/help - помощь\n"
         "/random - случайная страна\n"
-        "/quiz - угадай страну по флагу\n"
-        "Или просто отправь название страны текстом.",
-        reply_markup=get_main_keyboard(),
+        "/quiz - викторина",
+        reply_markup=get_main_keyboard()
     )
 
 
-async def random_country(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def random_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     country, error = get_random_country()
+
     if error:
-        await update.message.reply_text(error, reply_markup=get_main_keyboard())
+        await update.message.reply_text(error)
         return
 
     text, image_url = format_country(country)
-    if image_url:
-        await update.message.reply_photo(photo=image_url, caption=text, reply_markup=get_main_keyboard())
-    else:
-        await update.message.reply_text(text, reply_markup=get_main_keyboard())
+
+    await update.message.reply_photo(
+        photo=image_url,
+        caption=text,
+        reply_markup=get_main_keyboard()
+    )
 
 
-async def quiz_country_flag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def quiz_country_flag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if message is None:
-        return
 
     countries, error = get_countries_for_quiz()
+
     if error:
-        await message.reply_text(error, reply_markup=get_main_keyboard())
+        await message.reply_text(error)
         return
 
     round_data = build_quiz_round(countries)
+
     QUIZ_STATE_BY_CHAT[message.chat_id] = round_data
 
-    options = round_data["options"]
-    quiz_text = (
-        "Угадай страну по флагу:\n"
-        f"1) {options[0]}\n"
-        f"2) {options[1]}\n"
-        f"3) {options[2]}\n"
-        f"4) {options[3]}\n"
-        "Ответь номером 1-4 или названием страны.\n"
-        "Если передумал(а), напиши: ❌ Отмена викторины"
+    buttons = []
+
+    for option in round_data["options"]:
+        buttons.append(
+            [InlineKeyboardButton(option, callback_data=option)]
+        )
+
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    await message.reply_photo(
+        photo=round_data["flag_url"],
+        caption="🏳️ Угадай страну по флагу:",
+        reply_markup=keyboard
     )
 
-    if round_data["flag_url"]:
-        await message.reply_photo(photo=round_data["flag_url"], caption=quiz_text, reply_markup=get_main_keyboard())
-    else:
-        await message.reply_text(quiz_text, reply_markup=get_main_keyboard())
 
+async def quiz_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-async def check_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str) -> bool:
-    message = update.message
-    if message is None:
-        return False
+    chat_id = query.message.chat_id
+    user_answer = query.data
 
-    round_data = QUIZ_STATE_BY_CHAT.get(message.chat_id)
+    round_data = QUIZ_STATE_BY_CHAT.get(chat_id)
+
     if not round_data:
-        return False
-
-    options = round_data.get("options", [])
-    correct = round_data.get("correct", "")
-    selected = None
-
-    lowered_text = user_text.lower().strip()
-    if lowered_text in {"❌ отмена викторины", "отмена викторины", "cancel", "отмена"}:
-        QUIZ_STATE_BY_CHAT.pop(message.chat_id, None)
-        await message.reply_text("Викторина отменена.", reply_markup=get_main_keyboard())
-        return True
-
-    if user_text.isdigit():
-        index = int(user_text) - 1
-        if 0 <= index < len(options):
-            selected = options[index]
-    else:
-        for option in options:
-            if option.lower() == lowered_text:
-                selected = option
-                break
-
-    if selected is None:
-        await message.reply_text("Для викторины введи номер 1-4 или название страны.", reply_markup=get_main_keyboard())
-        return True
-
-    QUIZ_STATE_BY_CHAT.pop(message.chat_id, None)
-
-    if selected == correct:
-        await message.reply_text(f"Верно! Это {correct}.", reply_markup=get_main_keyboard())
-    else:
-        await message.reply_text(
-            f"Неверно. Правильный ответ: {correct}.\nТы выбрал: {selected}.",
-            reply_markup=get_main_keyboard(),
-        )
-    return True
-
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.message
-    if message is None:
+        await query.edit_message_caption("Викторина устарела.")
         return
 
-    user_text = (message.text or "").strip()
-    if not user_text:
-        await message.reply_text("Введите название страны.", reply_markup=get_main_keyboard())
-        return
+    correct = round_data["correct"]
 
-    command_like = user_text.lower()
-    if "помощ" in command_like or command_like == "help":
+    if user_answer == correct:
+        text = f"✅ Верно! Это {correct}"
+    else:
+        text = f"❌ Неверно.\nПравильный ответ: {correct}"
+
+    QUIZ_STATE_BY_CHAT.pop(chat_id, None)
+
+    await query.edit_message_caption(text)
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = (update.message.text or "").strip().lower()
+
+    if "помощ" in user_text:
         await help_command(update, context)
         return
-    if "случайная страна" in command_like or command_like == "random":
+
+    if "случайная страна" in user_text:
         await random_country(update, context)
         return
-    if "угадай флаг" in command_like or command_like == "quiz":
+
+    if "угадай флаг" in user_text:
         await quiz_country_flag(update, context)
         return
 
-    if await check_quiz_answer(update, context, user_text):
-        return
-
     country, error = search_country_by_name(user_text)
+
     if error:
-        await message.reply_text(error, reply_markup=get_main_keyboard())
+        await update.message.reply_text(error)
         return
 
     text, image_url = format_country(country)
-    if image_url:
-        await message.reply_photo(photo=image_url, caption=text, reply_markup=get_main_keyboard())
-    else:
-        await message.reply_text(text, reply_markup=get_main_keyboard())
+
+    await update.message.reply_photo(
+        photo=image_url,
+        caption=text,
+        reply_markup=get_main_keyboard()
+    )
 
 
-def main() -> None:
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в .env")
-
+def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("random", random_country))
     app.add_handler(CommandHandler("quiz", quiz_country_flag))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("Бот запущен. Нажмите Ctrl+C для остановки.")
+    app.add_handler(CallbackQueryHandler(quiz_button))
+
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+
+    print("Бот запущен.")
     app.run_polling()
 
 
